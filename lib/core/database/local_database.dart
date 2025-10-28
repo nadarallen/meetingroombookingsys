@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'models/amenity.dart';
 import 'models/app_user.dart';
@@ -15,7 +16,7 @@ class LocalDatabase {
   static final LocalDatabase instance = LocalDatabase._();
 
   static const _databaseName = 'meeting_room_booking.db';
-  static const _schemaVersion = 1;
+  static const _schemaVersion = 5;
 
   static const _roomsTable = 'rooms';
   static const _bookingsTable = 'bookings';
@@ -24,6 +25,7 @@ class LocalDatabase {
 
   Database? _database;
   Completer<Database>? _opening;
+  DatabaseFactory? _factory;
 
   Future<Database> get database async {
     if (_database != null) {
@@ -36,17 +38,20 @@ class LocalDatabase {
     final completer = Completer<Database>();
     _opening = completer;
     try {
-      final dbPath = await getDatabasesPath();
-      final fullPath = p.join(dbPath, _databaseName);
+      final factory = _ensureFactory();
+      final dbPath = await _resolveDatabasePath(factory);
+      final directory = Directory(p.dirname(dbPath));
 
-      // Ensure base directory exists (primarily for desktop).
-      await Directory(dbPath).create(recursive: true);
+      // Ensure base directory exists (primarily for desktop / FFI).
+      await directory.create(recursive: true);
 
-      _database = await openDatabase(
-        fullPath,
-        version: _schemaVersion,
-        onCreate: _onCreate,
-        onUpgrade: _onUpgrade,
+      _database = await factory.openDatabase(
+        dbPath,
+        options: OpenDatabaseOptions(
+          version: _schemaVersion,
+          onCreate: _onCreate,
+          onUpgrade: _onUpgrade,
+        ),
       );
       completer.complete(_database!);
     } catch (error, stackTrace) {
@@ -67,6 +72,31 @@ class LocalDatabase {
     }
   }
 
+  DatabaseFactory _ensureFactory() {
+    if (_factory != null) {
+      return _factory!;
+    }
+
+    if (Platform.isWindows || Platform.isLinux) {
+      sqfliteFfiInit();
+      _factory = databaseFactoryFfi;
+    } else {
+      _factory = databaseFactory;
+    }
+
+    return _factory!;
+  }
+
+  Future<String> _resolveDatabasePath(DatabaseFactory factory) async {
+    if (factory == databaseFactoryFfi) {
+      final basePath = await databaseFactoryFfi.getDatabasesPath();
+      return p.join(basePath, _databaseName);
+    }
+
+    final basePath = await getDatabasesPath();
+    return p.join(basePath, _databaseName);
+  }
+
   Future<void> _onCreate(Database db, int version) async {
     await db.execute('''
       CREATE TABLE $_roomsTable (
@@ -75,7 +105,11 @@ class LocalDatabase {
         capacity INTEGER NOT NULL,
         location TEXT NOT NULL,
         description TEXT,
+        image_url TEXT,
         amenity_ids TEXT,
+        latitude REAL,
+        longitude REAL,
+        is_active INTEGER NOT NULL DEFAULT 1,
         updated_at INTEGER NOT NULL
       )
     ''');
@@ -101,7 +135,8 @@ class LocalDatabase {
         role TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
-        is_active INTEGER NOT NULL DEFAULT 1
+        is_active INTEGER NOT NULL DEFAULT 1,
+        is_admin INTEGER NOT NULL DEFAULT 0
       )
     ''');
 
@@ -119,6 +154,8 @@ class LocalDatabase {
         updated_at INTEGER NOT NULL,
         metadata TEXT,
         sync_status TEXT NOT NULL DEFAULT 'synced',
+        no_show_risk_score INTEGER,
+        checked_in INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY(room_id) REFERENCES $_roomsTable(id) ON DELETE CASCADE,
         FOREIGN KEY(user_id) REFERENCES $_usersTable(id) ON DELETE CASCADE
       )
@@ -130,11 +167,70 @@ class LocalDatabase {
     await db.execute(
       'CREATE INDEX idx_bookings_user_time ON $_bookingsTable(user_id, start_time, end_time)',
     );
+    await db.execute(
+      'CREATE INDEX idx_bookings_status ON $_bookingsTable(status)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_rooms_active ON $_roomsTable(is_active)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_rooms_location ON $_roomsTable(latitude, longitude)',
+    );
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
     final migrations = <_Migration>[
-      // Placeholder for future migrations.
+      _Migration(
+        targetVersion: 2,
+        run: (database) async {
+          await database.execute(
+            'ALTER TABLE $_roomsTable ADD COLUMN latitude REAL',
+          );
+          await database.execute(
+            'ALTER TABLE $_roomsTable ADD COLUMN longitude REAL',
+          );
+        },
+      ),
+      _Migration(
+        targetVersion: 3,
+        run: (database) async {
+          await database.execute(
+            'ALTER TABLE $_roomsTable ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1',
+          );
+          await database.execute(
+            'ALTER TABLE $_usersTable ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0',
+          );
+          await database.execute(
+            'ALTER TABLE $_bookingsTable ADD COLUMN no_show_risk_score INTEGER',
+          );
+          await database.execute(
+            'ALTER TABLE $_bookingsTable ADD COLUMN checked_in INTEGER NOT NULL DEFAULT 0',
+          );
+        },
+      ),
+      _Migration(
+        targetVersion: 4,
+        run: (database) async {
+          await database.execute(
+            'ALTER TABLE $_roomsTable ADD COLUMN image_url TEXT',
+          );
+        },
+      ),
+      _Migration(
+        targetVersion: 5,
+        run: (database) async {
+          // Add performance indexes
+          await database.execute(
+            'CREATE INDEX IF NOT EXISTS idx_bookings_status ON $_bookingsTable(status)',
+          );
+          await database.execute(
+            'CREATE INDEX IF NOT EXISTS idx_rooms_active ON $_roomsTable(is_active)',
+          );
+          await database.execute(
+            'CREATE INDEX IF NOT EXISTS idx_rooms_location ON $_roomsTable(latitude, longitude)',
+          );
+        },
+      ),
     ];
 
     for (final migration in migrations) {
@@ -281,6 +377,37 @@ class LocalDatabase {
     );
   }
 
+  /// Checks for booking conflicts in the local database
+  Future<bool> hasBookingConflict(Booking booking,
+      {String? excludeBookingId}) async {
+    final db = await database;
+    final result = await db.query(
+      _bookingsTable,
+      where: '''
+        room_id = ? 
+        AND status != 'cancelled' 
+        AND id != ?
+        AND (
+          (start_time < ? AND end_time > ?) OR
+          (start_time < ? AND end_time > ?) OR
+          (start_time >= ? AND end_time <= ?)
+        )
+      ''',
+      whereArgs: [
+        booking.roomId,
+        excludeBookingId ?? booking.id,
+        booking.endTime.millisecondsSinceEpoch,
+        booking.startTime.millisecondsSinceEpoch,
+        booking.startTime.millisecondsSinceEpoch,
+        booking.endTime.millisecondsSinceEpoch,
+        booking.startTime.millisecondsSinceEpoch,
+        booking.endTime.millisecondsSinceEpoch,
+      ],
+    );
+
+    return result.isNotEmpty;
+  }
+
   Future<void> upsertBookings(List<Booking> bookings) async {
     final db = await database;
     final batch = db.batch();
@@ -341,6 +468,27 @@ class LocalDatabase {
   Future<void> deleteBookingsForRoom(String roomId) async {
     final db = await database;
     await db.delete(_bookingsTable, where: 'room_id = ?', whereArgs: [roomId]);
+  }
+
+  // Clear methods for development/testing
+  Future<void> clearRooms() async {
+    final db = await database;
+    await db.delete(_roomsTable);
+  }
+
+  Future<void> clearBookings() async {
+    final db = await database;
+    await db.delete(_bookingsTable);
+  }
+
+  Future<void> clearUsers() async {
+    final db = await database;
+    await db.delete(_usersTable);
+  }
+
+  Future<void> clearAmenities() async {
+    final db = await database;
+    await db.delete(_amenitiesTable);
   }
 
   Future<Booking?> getBookingById(String id) async {

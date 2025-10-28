@@ -65,7 +65,9 @@ class FirestoreService {
 
   // ---- Upserts ----
   Future<void> upsertRoom(Room room) async {
-    await _roomsCollection.doc(room.id).set(room.toCloudMap(), SetOptions(merge: true));
+    await _roomsCollection
+        .doc(room.id)
+        .set(room.toCloudMap(), SetOptions(merge: true));
   }
 
   Future<void> deleteRoom(String id) async {
@@ -79,7 +81,9 @@ class FirestoreService {
   }
 
   Future<void> upsertUser(AppUser user) async {
-    await _usersCollection.doc(user.id).set(user.toCloudMap(), SetOptions(merge: true));
+    await _usersCollection
+        .doc(user.id)
+        .set(user.toCloudMap(), SetOptions(merge: true));
   }
 
   Future<void> upsertBooking(Booking booking) async {
@@ -103,10 +107,37 @@ class FirestoreService {
       );
 
       if (hasConflict) {
-        throw BookingConflictException('Room already booked for the selected slot.');
+        throw BookingConflictException(
+            'Room already booked for the selected slot.');
       }
 
-      transaction.set(bookingRef, booking.toCloudMap(), SetOptions(merge: true));
+      transaction.set(
+          bookingRef, booking.toCloudMap(), SetOptions(merge: true));
+    });
+  }
+
+  Future<void> updateBookingWithConflictCheck(Booking booking) async {
+    await _firestore.runTransaction((transaction) async {
+      final bookingRef = _bookingsCollection.doc(booking.id);
+
+      // Check for conflicts with other bookings
+      final overlappingQuery = _bookingsCollection
+          .where('roomId', isEqualTo: booking.roomId)
+          .where('startTime', isLessThan: booking.endTime)
+          .where('endTime', isGreaterThan: booking.startTime);
+
+      final overlappingSnapshot = await overlappingQuery.get();
+      final hasConflict = overlappingSnapshot.docs.any(
+        (doc) => doc.id != booking.id && doc['status'] != 'cancelled',
+      );
+
+      if (hasConflict) {
+        throw BookingConflictException(
+            'Room already booked for the selected slot.');
+      }
+
+      transaction.set(
+          bookingRef, booking.toCloudMap(), SetOptions(merge: true));
     });
   }
 

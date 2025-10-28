@@ -30,6 +30,8 @@ class Booking {
     DateTime? updatedAt,
     this.metadata = const {},
     this.syncStatus = SyncStatus.synced,
+    this.noShowRiskScore,
+    this.checkedIn,
   })  : createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
 
@@ -45,6 +47,8 @@ class Booking {
   final DateTime updatedAt;
   final Map<String, dynamic> metadata;
   final String syncStatus;
+  final int? noShowRiskScore;
+  final bool? checkedIn;
 
   Booking copyWith({
     String? id,
@@ -59,6 +63,8 @@ class Booking {
     DateTime? updatedAt,
     Map<String, dynamic>? metadata,
     String? syncStatus,
+    int? noShowRiskScore,
+    bool? checkedIn,
   }) {
     return Booking(
       id: id ?? this.id,
@@ -73,6 +79,8 @@ class Booking {
       updatedAt: updatedAt ?? this.updatedAt,
       metadata: metadata ?? this.metadata,
       syncStatus: syncStatus ?? this.syncStatus,
+      noShowRiskScore: noShowRiskScore ?? this.noShowRiskScore,
+      checkedIn: checkedIn ?? this.checkedIn,
     );
   }
 
@@ -90,6 +98,8 @@ class Booking {
       'updated_at': updatedAt.millisecondsSinceEpoch,
       'metadata': jsonEncode(metadata),
       'sync_status': syncStatus,
+      'no_show_risk_score': noShowRiskScore,
+      'checked_in': checkedIn == true ? 1 : 0,
     };
   }
 
@@ -115,6 +125,8 @@ class Booking {
       ),
       metadata: _decodeMetadata(map['metadata'] as String?),
       syncStatus: map['sync_status'] as String? ?? SyncStatus.synced,
+      noShowRiskScore: map['no_show_risk_score'] as int?,
+      checkedIn: (map['checked_in'] as num?)?.toInt() == 1,
     );
   }
 
@@ -131,6 +143,8 @@ class Booking {
       'updatedAt': updatedAt.toUtc(),
       'metadata': metadata,
       'syncStatus': syncStatus,
+      'noShowRiskScore': noShowRiskScore,
+      'checkedIn': checkedIn,
     };
   }
 
@@ -148,6 +162,8 @@ class Booking {
       updatedAt: _fromTimestamp(map['updatedAt']),
       metadata: (map['metadata'] as Map<String, dynamic>?) ?? const {},
       syncStatus: map['syncStatus'] as String? ?? SyncStatus.synced,
+      noShowRiskScore: map['noShowRiskScore'] as int?,
+      checkedIn: map['checkedIn'] as bool?,
     );
   }
 

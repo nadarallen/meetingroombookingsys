@@ -128,23 +128,100 @@ class DatabaseSyncManager {
   }
 
   Future<void> createBooking(Booking booking) async {
+    debugPrint(
+        'DatabaseSyncManager.createBooking called with booking: ${booking.id}');
+
+    // Check for local conflicts first
+    debugPrint(
+        'DatabaseSyncManager.createBooking: Checking for local conflicts');
+    final hasLocalConflict = await localDatabase.hasBookingConflict(booking);
+    if (hasLocalConflict) {
+      debugPrint('DatabaseSyncManager.createBooking: Local conflict detected');
+      throw BookingConflictException(
+          'Room already booked for the selected slot.');
+    }
+
     final pending = booking.copyWith(
       syncStatus: SyncStatus.pendingUp,
       updatedAt: DateTime.now(),
     );
+
+    debugPrint('DatabaseSyncManager.createBooking: Saving locally first');
     await localDatabase.upsertBooking(pending);
+
     try {
+      debugPrint('DatabaseSyncManager.createBooking: Attempting remote save');
       await remoteService.createBookingWithConflictCheck(
         pending.copyWith(syncStatus: SyncStatus.synced),
       );
+      debugPrint('DatabaseSyncManager.createBooking: Remote save successful');
       await localDatabase.markBookingSynced(pending.id);
-    } on BookingConflictException {
+    } on BookingConflictException catch (e) {
+      debugPrint(
+          'DatabaseSyncManager.createBooking: BookingConflictException - ${e.message}');
       await localDatabase.upsertBooking(
         pending.copyWith(syncStatus: SyncStatus.failed),
       );
       rethrow;
-    } on FirebaseException {
+    } on FirebaseException catch (e) {
+      debugPrint(
+          'DatabaseSyncManager.createBooking: FirebaseException - ${e.message}');
       // Keep as pending for retry.
+      rethrow;
+    } catch (e, stackTrace) {
+      debugPrint(
+          'DatabaseSyncManager.createBooking: Unexpected exception - $e');
+      debugPrint('DatabaseSyncManager.createBooking: StackTrace - $stackTrace');
+      rethrow;
+    }
+  }
+
+  Future<void> updateBooking(Booking booking) async {
+    debugPrint(
+        'DatabaseSyncManager.updateBooking called with booking: ${booking.id}');
+
+    // Check for local conflicts first (excluding the current booking)
+    debugPrint(
+        'DatabaseSyncManager.updateBooking: Checking for local conflicts');
+    final hasLocalConflict = await localDatabase.hasBookingConflict(booking,
+        excludeBookingId: booking.id);
+    if (hasLocalConflict) {
+      debugPrint('DatabaseSyncManager.updateBooking: Local conflict detected');
+      throw BookingConflictException(
+          'Room already booked for the selected slot.');
+    }
+
+    final pending = booking.copyWith(
+      syncStatus: SyncStatus.pendingUp,
+      updatedAt: DateTime.now(),
+    );
+
+    debugPrint('DatabaseSyncManager.updateBooking: Saving locally first');
+    await localDatabase.upsertBooking(pending);
+
+    try {
+      debugPrint('DatabaseSyncManager.updateBooking: Attempting remote save');
+      await remoteService.updateBookingWithConflictCheck(
+        pending.copyWith(syncStatus: SyncStatus.synced),
+      );
+      debugPrint('DatabaseSyncManager.updateBooking: Remote save successful');
+      await localDatabase.markBookingSynced(pending.id);
+    } on BookingConflictException catch (e) {
+      debugPrint(
+          'DatabaseSyncManager.updateBooking: BookingConflictException - ${e.message}');
+      await localDatabase.upsertBooking(
+        pending.copyWith(syncStatus: SyncStatus.failed),
+      );
+      rethrow;
+    } on FirebaseException catch (e) {
+      debugPrint(
+          'DatabaseSyncManager.updateBooking: FirebaseException - ${e.message}');
+      // Keep as pending for retry.
+      rethrow;
+    } catch (e, stackTrace) {
+      debugPrint(
+          'DatabaseSyncManager.updateBooking: Unexpected exception - $e');
+      debugPrint('DatabaseSyncManager.updateBooking: StackTrace - $stackTrace');
       rethrow;
     }
   }

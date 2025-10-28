@@ -59,12 +59,18 @@ class BookingViewModel extends ChangeNotifier {
     String? title,
     String? notes,
   }) async {
+    debugPrint(
+        'BookingViewModel.createBooking called with: roomId=$roomId, start=$start, end=$end, title=$title');
+
     final userId = _currentUserId();
     if (userId == null) {
+      debugPrint('BookingViewModel.createBooking failed: User not signed in');
       _error = 'You must be signed in to create a booking.';
       notifyListeners();
       return false;
     }
+
+    debugPrint('BookingViewModel.createBooking: userId=$userId');
 
     final booking = db.Booking(
       id: _generateId(),
@@ -79,17 +85,112 @@ class BookingViewModel extends ChangeNotifier {
       syncStatus: db.SyncStatus.pendingUp,
     );
 
+    debugPrint(
+        'BookingViewModel.createBooking: Created booking with id=${booking.id}');
+
     try {
       _error = null;
+      debugPrint(
+          'BookingViewModel.createBooking: Calling syncManager.createBooking');
       await _syncManager.createBooking(booking);
+      debugPrint(
+          'BookingViewModel.createBooking: Successfully created booking');
       await load(roomId: _activeRoomId ?? roomId);
       return true;
     } on BookingConflictException catch (e) {
+      debugPrint(
+          'BookingViewModel.createBooking: BookingConflictException - ${e.message}');
       _error = e.message;
       notifyListeners();
       return false;
-    } catch (_) {
+    } catch (e, stackTrace) {
+      debugPrint('BookingViewModel.createBooking: Exception - $e');
+      debugPrint('BookingViewModel.createBooking: StackTrace - $stackTrace');
       _error = 'Unable to create booking. Please try again.';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> updateBooking({
+    required String bookingId,
+    required String roomId,
+    required DateTime start,
+    required DateTime end,
+    String? title,
+    String? notes,
+  }) async {
+    debugPrint(
+        'BookingViewModel.updateBooking called with: bookingId=$bookingId, roomId=$roomId, start=$start, end=$end, title=$title');
+
+    final userId = _currentUserId();
+    if (userId == null) {
+      debugPrint('BookingViewModel.updateBooking failed: User not signed in');
+      _error = 'You must be signed in to update a booking.';
+      notifyListeners();
+      return false;
+    }
+
+    // Find the existing booking
+    final existingBooking = _bookings.firstWhere(
+      (b) => b.id == bookingId,
+      orElse: () => throw Exception('Booking not found'),
+    );
+
+    final updatedBooking = existingBooking.copyWith(
+      roomId: roomId,
+      startTime: start,
+      endTime: end,
+      title: title,
+      notes: notes,
+      status: db.BookingStatus.pending,
+      syncStatus: db.SyncStatus.pendingUp,
+      updatedAt: DateTime.now(),
+    );
+
+    debugPrint(
+        'BookingViewModel.updateBooking: Created updated booking with id=${updatedBooking.id}');
+
+    try {
+      _error = null;
+      debugPrint(
+          'BookingViewModel.updateBooking: Calling syncManager.updateBooking');
+      await _syncManager.updateBooking(updatedBooking);
+      debugPrint(
+          'BookingViewModel.updateBooking: Successfully updated booking');
+      await load(roomId: _activeRoomId ?? roomId);
+      return true;
+    } on BookingConflictException catch (e) {
+      debugPrint(
+          'BookingViewModel.updateBooking: BookingConflictException - ${e.message}');
+      _error = e.message;
+      notifyListeners();
+      return false;
+    } catch (e, stackTrace) {
+      debugPrint('BookingViewModel.updateBooking: Exception - $e');
+      debugPrint('BookingViewModel.updateBooking: StackTrace - $stackTrace');
+      _error = 'Unable to update booking. Please try again.';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> cancelBooking(String bookingId) async {
+    debugPrint(
+        'BookingViewModel.cancelBooking called with: bookingId=$bookingId');
+
+    try {
+      _error = null;
+      await _syncManager.updateBookingStatus(
+          bookingId, db.BookingStatus.cancelled);
+      debugPrint(
+          'BookingViewModel.cancelBooking: Successfully cancelled booking');
+      await load(roomId: _activeRoomId);
+      return true;
+    } catch (e, stackTrace) {
+      debugPrint('BookingViewModel.cancelBooking: Exception - $e');
+      debugPrint('BookingViewModel.cancelBooking: StackTrace - $stackTrace');
+      _error = 'Unable to cancel booking. Please try again.';
       notifyListeners();
       return false;
     }

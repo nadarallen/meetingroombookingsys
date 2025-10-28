@@ -9,6 +9,7 @@ class AppUser {
     DateTime? createdAt,
     DateTime? updatedAt,
     this.isActive = true,
+    this.isAdmin = false,
   })  : createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
 
@@ -21,6 +22,7 @@ class AppUser {
   final DateTime createdAt;
   final DateTime updatedAt;
   final bool isActive;
+  final bool isAdmin;
 
   AppUser copyWith({
     String? id,
@@ -32,6 +34,7 @@ class AppUser {
     DateTime? createdAt,
     DateTime? updatedAt,
     bool? isActive,
+    bool? isAdmin,
   }) {
     return AppUser(
       id: id ?? this.id,
@@ -43,6 +46,7 @@ class AppUser {
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       isActive: isActive ?? this.isActive,
+      isAdmin: isAdmin ?? this.isAdmin,
     );
   }
 
@@ -57,6 +61,7 @@ class AppUser {
       'created_at': createdAt.millisecondsSinceEpoch,
       'updated_at': updatedAt.millisecondsSinceEpoch,
       'is_active': isActive ? 1 : 0,
+      'is_admin': isAdmin ? 1 : 0,
     };
   }
 
@@ -75,6 +80,7 @@ class AppUser {
         (map['updated_at'] as num).toInt(),
       ),
       isActive: (map['is_active'] as num?)?.toInt() == 1,
+      isAdmin: (map['is_admin'] as num?)?.toInt() == 1,
     );
   }
 
@@ -88,6 +94,7 @@ class AppUser {
       'createdAt': createdAt.toUtc(),
       'updatedAt': updatedAt.toUtc(),
       'isActive': isActive,
+      'isAdmin': isAdmin,
     };
   }
 
@@ -102,6 +109,7 @@ class AppUser {
       createdAt: _fromTimestamp(map['createdAt']),
       updatedAt: _fromTimestamp(map['updatedAt']),
       isActive: map['isActive'] as bool? ?? true,
+      isAdmin: map['isAdmin'] as bool? ?? false,
     );
   }
 

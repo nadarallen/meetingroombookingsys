@@ -11,7 +11,10 @@ import '../../features/bookings/presentation/pages/new_booking_page.dart';
 import '../../features/bookings/presentation/viewmodels/booking_view_model.dart';
 import '../../features/home/presentation/pages/home_page.dart';
 import '../../features/rooms/presentation/pages/room_list_page.dart';
+import '../../features/rooms/presentation/pages/room_map_page.dart';
+import '../../features/chat/presentation/pages/chat_page.dart';
 import '../../features/splash/splash_page.dart';
+import '../../features/admin/presentation/pages/admin_dashboard_page.dart';
 import '../database/database_sync_manager.dart';
 import '../database/local_database.dart';
 
@@ -30,7 +33,8 @@ class AppRouter {
       final location = state.matchedLocation;
       final initialized = _authViewModel.isInitialized;
       final signedIn = _authViewModel.isAuthenticated;
-      final isAuthRoute = location == '/auth/login' || location == '/auth/register';
+      final isAuthRoute =
+          location == '/auth/login' || location == '/auth/register';
 
       if (!initialized) {
         return location == '/splash' ? null : '/splash';
@@ -66,6 +70,12 @@ class AppRouter {
           GoRoute(
             path: 'rooms',
             builder: (context, state) => const RoomListPage(),
+            routes: [
+              GoRoute(
+                path: 'map',
+                builder: (context, state) => const RoomMapPage(),
+              ),
+            ],
           ),
           GoRoute(
             path: 'bookings',
@@ -85,7 +95,8 @@ class AppRouter {
                     create: (context) => BookingViewModel(
                       syncManager: context.read<DatabaseSyncManager>(),
                       localDatabase: context.read<LocalDatabase>(),
-                      currentUserId: () => context.read<AuthViewModel>().user?.uid,
+                      currentUserId: () =>
+                          context.read<AuthViewModel>().user?.uid,
                     )..load(),
                     child: const NewBookingPage(),
                   );
@@ -96,6 +107,14 @@ class AppRouter {
           GoRoute(
             path: 'profile',
             builder: (context, state) => const ProfilePage(),
+          ),
+          GoRoute(
+            path: 'chat',
+            builder: (context, state) => const ChatPage(),
+          ),
+          GoRoute(
+            path: 'admin',
+            builder: (context, state) => const AdminDashboardPage(),
           ),
         ],
       ),

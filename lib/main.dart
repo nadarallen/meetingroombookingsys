@@ -14,6 +14,8 @@ import 'features/auth/data/datasources/auth_remote_datasource.dart';
 import 'features/auth/data/repositories/auth_repository_impl.dart';
 import 'features/auth/presentation/viewmodels/auth_view_model.dart';
 import 'shared/services/notification_service.dart';
+import 'shared/services/ai/ai_chat_service.dart';
+import 'shared/services/storage_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,6 +26,8 @@ Future<void> main() async {
   final authRepository = AuthRepositoryImpl(AuthRemoteDataSource());
   final localDatabase = LocalDatabase.instance;
   final firestoreService = FirestoreService();
+  final storageService = StorageService();
+  final aiChatService = AiChatService();
   final syncManager = DatabaseSyncManager(
     localDatabase: localDatabase,
     remoteService: firestoreService,
@@ -40,10 +44,13 @@ Future<void> main() async {
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => ThemeNotifier(prefs)..load()),
-        ChangeNotifierProvider(create: (_) => AuthViewModel(authRepository, prefs)..init()),
+        ChangeNotifierProvider(
+            create: (_) => AuthViewModel(authRepository, prefs)..init()),
         Provider<DatabaseSyncManager>.value(value: syncManager),
         Provider<LocalDatabase>.value(value: localDatabase),
         Provider<FirestoreService>.value(value: firestoreService),
+        Provider<StorageService>.value(value: storageService),
+        Provider<AiChatService>.value(value: aiChatService),
       ],
       child: const MeetingRoomApp(),
     ),
