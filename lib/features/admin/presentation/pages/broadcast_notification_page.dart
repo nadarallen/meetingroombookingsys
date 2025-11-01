@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../../../../core/database/local_database.dart';
-import '../../../../core/database/models/app_user.dart';
+import '../../../../features/auth/presentation/viewmodels/auth_view_model.dart';
 import '../../../../shared/services/notification_service.dart';
+import '../../domain/entities/broadcast_targets.dart';
+import '../../domain/repositories/admin_repository.dart';
+import '../../domain/usecases/get_broadcast_targets.dart';
+import '../../domain/usecases/save_admin_broadcast.dart';
+import '../viewmodels/broadcast_notification_view_model.dart';
 
 class BroadcastNotificationPage extends StatefulWidget {
   const BroadcastNotificationPage({super.key});
@@ -16,20 +20,10 @@ class BroadcastNotificationPage extends StatefulWidget {
 class _BroadcastNotificationPageState extends State<BroadcastNotificationPage> {
   final _messageController = TextEditingController();
   final _titleController = TextEditingController();
-  String _selectedTarget = 'all';
-  String _selectedDepartment = 'All';
+  BroadcastAudience _audience = BroadcastAudience.all;
+  String? _selectedDepartment;
   DateTime? _scheduledTime;
   bool _isScheduled = false;
-  bool _sending = false;
-
-  List<String> _departments = ['All'];
-  List<AppUser> _users = [];
-
-  @override
-  void initState() {
-    super.initState();
-    _loadUsers();
-  }
 
   @override
   void dispose() {
@@ -38,83 +32,129 @@ class _BroadcastNotificationPageState extends State<BroadcastNotificationPage> {
     super.dispose();
   }
 
-  Future<void> _loadUsers() async {
-    try {
-      final localDatabase = context.read<LocalDatabase>();
-      final users = await localDatabase.getUsers();
-      setState(() {
-        _users = users;
-        _departments = [
-          'All',
-          ...users
-              .map((u) => u.department)
-              .where((d) => d != null)
-              .cast<String>()
-              .toSet()
-              .toList()
-        ];
-      });
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading users: $e')),
-        );
-      }
-    }
-  }
-
-  List<AppUser> get _targetUsers {
-    switch (_selectedTarget) {
-      case 'all':
-        return _users.where((u) => u.isActive).toList();
-      case 'department':
-        return _users
-            .where((u) => u.isActive && u.department == _selectedDepartment)
-            .toList();
-      case 'admin':
-        return _users.where((u) => u.isActive && u.isAdmin).toList();
-      default:
-        return [];
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Broadcast Notification'),
-        actions: [
-          IconButton(
-            onPressed: _sending ? null : _sendNotification,
-            icon: _sending
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.send),
-          ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _buildTargetSelection(),
-            const SizedBox(height: 24),
-            _buildMessageForm(),
-            const SizedBox(height: 24),
-            _buildSchedulingOptions(),
-            const SizedBox(height: 24),
-            _buildPreview(),
-          ],
-        ),
+    final repository = context.read<AdminRepository>();
+
+    return ChangeNotifierProvider(
+      create: (_) => BroadcastNotificationViewModel(
+        getBroadcastTargets: GetBroadcastTargets(repository),
+        saveAdminBroadcast: SaveAdminBroadcast(repository),
+      )..loadTargets(),
+      child: Consumer<BroadcastNotificationViewModel>(
+        builder: (context, viewModel, _) {
+          final auth = context.watch<AuthViewModel>();
+          final targets = viewModel.targets;
+
+          return Scaffold(
+            appBar: AppBar(
+              title: const Text('Broadcast Notification'),
+              actions: [
+                IconButton(
+                  onPressed: viewModel.isSending
+                      ? null
+                      : () => _onSend(context, viewModel, auth),
+                  icon: viewModel.isSending
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.send),
+                ),
+              ],
+            ),
+            body: viewModel.isLoadingTargets && targets == null
+                ? const Center(child: CircularProgressIndicator())
+                : targets == null
+                    ? _BroadcastErrorState(
+                        error: viewModel.error ?? 'Unable to load user segments',
+                        onRetry: viewModel.loadTargets,
+                      )
+                    : SingleChildScrollView(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _buildTargetSelection(viewModel, targets),
+                            const SizedBox(height: 24),
+                            _buildMessageForm(),
+                            const SizedBox(height: 24),
+                            _buildSchedulingOptions(context),
+                            const SizedBox(height: 24),
+                            _buildPreview(viewModel, targets),
+                          ],
+                        ),
+                      ),
+          );
+        },
       ),
     );
   }
 
-  Widget _buildTargetSelection() {
+  Future<void> _onSend(
+    BuildContext context,
+    BroadcastNotificationViewModel viewModel,
+    AuthViewModel auth,
+  ) async {
+    if (_audience == BroadcastAudience.department &&
+        (_selectedDepartment == null || _selectedDepartment!.isEmpty)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a department to target.')),
+      );
+      return;
+    }
+
+    try {
+      await viewModel.sendBroadcast(
+        authViewModel: auth,
+        notificationService: NotificationService.instance,
+        title: _titleController.text.trim(),
+        message: _messageController.text.trim(),
+        audience: _audience,
+        department: _audience == BroadcastAudience.department
+            ? _selectedDepartment
+            : null,
+        scheduledAt: _isScheduled ? _scheduledTime : null,
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            _isScheduled
+                ? 'Broadcast scheduled successfully'
+                : 'Broadcast sent successfully',
+          ),
+        ),
+      );
+      _messageController.clear();
+      _titleController.clear();
+      setState(() {
+        _audience = BroadcastAudience.all;
+        _selectedDepartment = null;
+        _isScheduled = false;
+        _scheduledTime = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to send broadcast: $error')),
+      );
+    }
+  }
+
+  Widget _buildTargetSelection(
+    BroadcastNotificationViewModel viewModel,
+    BroadcastTargets targets,
+  ) {
+    final departments = targets.departments;
+    if (departments.isNotEmpty) {
+      _selectedDepartment ??= departments.first;
+    } else {
+      _selectedDepartment = null;
+    }
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -126,46 +166,68 @@ class _BroadcastNotificationPageState extends State<BroadcastNotificationPage> {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
-            RadioListTile<String>(
+            RadioListTile<BroadcastAudience>(
               title: const Text('All Users'),
-              subtitle: Text(
-                  '${_users.where((u) => u.isActive).length} active users'),
-              value: 'all',
-              groupValue: _selectedTarget,
-              onChanged: (value) => setState(() => _selectedTarget = value!),
+              subtitle: Text('${targets.activeUsers} active users'),
+              value: BroadcastAudience.all,
+              groupValue: _audience,
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() => _audience = value);
+                }
+              },
             ),
-            RadioListTile<String>(
+            RadioListTile<BroadcastAudience>(
               title: const Text('Specific Department'),
-              subtitle: Text('${_targetUsers.length} users'),
-              value: 'department',
-              groupValue: _selectedTarget,
-              onChanged: (value) => setState(() => _selectedTarget = value!),
+              subtitle: Text(
+                departments.isEmpty
+                    ? 'No departments available'
+                    : '${viewModel.audienceCount(BroadcastAudience.department, department: _selectedDepartment)} users',
+              ),
+              value: BroadcastAudience.department,
+              groupValue: _audience,
+              onChanged: departments.isEmpty
+                  ? null
+                  : (value) {
+                      if (value != null) {
+                        setState(() => _audience = value);
+                      }
+                    },
             ),
-            if (_selectedTarget == 'department') ...[
-              const SizedBox(height: 8),
-              DropdownButtonFormField<String>(
-                value: _selectedDepartment,
-                decoration: const InputDecoration(
-                  labelText: 'Department',
-                  border: OutlineInputBorder(),
-                ),
-                items: _departments
-                    .map((dept) => DropdownMenuItem(
+            if (_audience == BroadcastAudience.department)
+              Padding(
+                padding: const EdgeInsets.only(left: 16, top: 8),
+                child: DropdownButtonFormField<String>(
+                  value: _selectedDepartment,
+                  items: departments
+                      .map(
+                        (dept) => DropdownMenuItem(
                           value: dept,
                           child: Text(dept),
-                        ))
-                    .toList(),
-                onChanged: (value) =>
-                    setState(() => _selectedDepartment = value!),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: departments.isEmpty
+                      ? null
+                      : (value) {
+                          setState(() => _selectedDepartment = value);
+                        },
+                  decoration: const InputDecoration(
+                    labelText: 'Department',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
               ),
-            ],
-            RadioListTile<String>(
+            RadioListTile<BroadcastAudience>(
               title: const Text('Admins Only'),
-              subtitle: Text(
-                  '${_users.where((u) => u.isActive && u.isAdmin).length} admin users'),
-              value: 'admin',
-              groupValue: _selectedTarget,
-              onChanged: (value) => setState(() => _selectedTarget = value!),
+              subtitle: Text('${targets.activeAdmins} admin users'),
+              value: BroadcastAudience.admin,
+              groupValue: _audience,
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() => _audience = value);
+                }
+              },
             ),
           ],
         ),
@@ -200,21 +262,10 @@ class _BroadcastNotificationPageState extends State<BroadcastNotificationPage> {
               decoration: const InputDecoration(
                 labelText: 'Message',
                 border: OutlineInputBorder(),
-                hintText: 'Enter your message here...',
-                alignLabelWithHint: true,
+                hintText: 'Write your announcement',
               ),
-              maxLines: 5,
+              maxLines: 6,
               maxLength: 500,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '${_messageController.text.length}/500 characters',
-              style: TextStyle(
-                color: _messageController.text.length > 500
-                    ? Colors.red
-                    : Colors.grey,
-                fontSize: 12,
-              ),
             ),
           ],
         ),
@@ -222,7 +273,7 @@ class _BroadcastNotificationPageState extends State<BroadcastNotificationPage> {
     );
   }
 
-  Widget _buildSchedulingOptions() {
+  Widget _buildSchedulingOptions(BuildContext context) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -236,28 +287,84 @@ class _BroadcastNotificationPageState extends State<BroadcastNotificationPage> {
             const SizedBox(height: 16),
             SwitchListTile(
               title: const Text('Schedule for later'),
-              subtitle: const Text('Send notification at a specific time'),
+              subtitle: const Text('Send at a specific date and time'),
               value: _isScheduled,
-              onChanged: (value) => setState(() => _isScheduled = value),
+              onChanged: (value) {
+                setState(() {
+                  _isScheduled = value;
+                  if (!value) {
+                    _scheduledTime = null;
+                  }
+                });
+              },
             ),
-            if (_isScheduled) ...[
-              const SizedBox(height: 16),
+            if (_isScheduled)
               ListTile(
+                contentPadding: EdgeInsets.zero,
                 leading: const Icon(Icons.schedule),
-                title: Text(_scheduledTime != null
-                    ? 'Scheduled for ${_formatDateTime(_scheduledTime!)}'
-                    : 'Select date and time'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: _selectScheduledTime,
+                title: Text(
+                  _scheduledTime == null
+                      ? 'Select date and time'
+                      : _scheduledTime!.toLocal().toString(),
+                ),
+                trailing: TextButton(
+                  onPressed: () async {
+                    final now = DateTime.now();
+                    final date = await showDatePicker(
+                      context: context,
+                      initialDate: now,
+                      firstDate: now,
+                      lastDate: now.add(const Duration(days: 180)),
+                    );
+                    if (date == null) return;
+                    final time = await showTimePicker(
+                      context: context,
+                      initialTime: TimeOfDay.now(),
+                    );
+                    if (time == null) return;
+
+                    setState(() {
+                      _scheduledTime = DateTime(
+                        date.year,
+                        date.month,
+                        date.day,
+                        time.hour,
+                        time.minute,
+                      );
+                    });
+                  },
+                  child: const Text('Select'),
+                ),
               ),
-            ],
           ],
         ),
       ),
     );
   }
 
-  Widget _buildPreview() {
+  Widget _buildPreview(
+    BroadcastNotificationViewModel viewModel,
+    BroadcastTargets targets,
+  ) {
+    final audienceDescription = () {
+      switch (_audience) {
+        case BroadcastAudience.all:
+          return '${targets.activeUsers} active users';
+        case BroadcastAudience.department:
+          final department = _selectedDepartment;
+          if (department == null) {
+            return 'No departments available';
+          }
+          final count = viewModel.audienceCount(
+            BroadcastAudience.department,
+            department: department,
+          );
+          return '$count users in $department';
+        case BroadcastAudience.admin:
+          return '${targets.activeAdmins} admins';
+      }
+    }();
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -269,196 +376,97 @@ class _BroadcastNotificationPageState extends State<BroadcastNotificationPage> {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.blue[50],
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.blue[200]!),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _titleController.text.isEmpty
-                        ? 'Notification Title'
-                        : _titleController.text,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.bold,
-                      fontSize: 16,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    _messageController.text.isEmpty
-                        ? 'Your message will appear here...'
-                        : _messageController.text,
-                    style: const TextStyle(fontSize: 14),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'To: ${_getTargetDescription()}',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                  if (_isScheduled && _scheduledTime != null)
-                    Text(
-                      'Scheduled: ${_formatDateTime(_scheduledTime!)}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey[600],
-                      ),
-                    ),
-                ],
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.group),
+              title: const Text('Audience'),
+              subtitle: Text(audienceDescription),
+            ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.title),
+              title: const Text('Title'),
+              subtitle: Text(
+                _titleController.text.isEmpty
+                    ? 'No title yet'
+                    : _titleController.text,
               ),
             ),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.message),
+              title: const Text('Message'),
+              subtitle: Text(
+                _messageController.text.isEmpty
+                    ? 'Your message preview will appear here'
+                    : _messageController.text,
+              ),
+            ),
+            if (_isScheduled)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.schedule_send),
+                title: const Text('Scheduled'),
+                subtitle: Text(
+                  _scheduledTime == null
+                      ? 'No time selected'
+                      : MaterialLocalizations.of(context)
+                          .formatFullDate(_scheduledTime!) +
+                          ' · ' +
+                          MaterialLocalizations.of(context)
+                              .formatTimeOfDay(
+                                TimeOfDay.fromDateTime(_scheduledTime!),
+                              ),
+                ),
+              ),
           ],
         ),
       ),
     );
   }
+}
 
-  String _getTargetDescription() {
-    switch (_selectedTarget) {
-      case 'all':
-        return 'All Users (${_users.where((u) => u.isActive).length})';
-      case 'department':
-        return '${_selectedDepartment} Department (${_targetUsers.length})';
-      case 'admin':
-        return 'Admins Only (${_users.where((u) => u.isActive && u.isAdmin).length})';
-      default:
-        return 'Unknown';
-    }
-  }
+class _BroadcastErrorState extends StatelessWidget {
+  const _BroadcastErrorState({required this.error, required this.onRetry});
 
-  String _formatDateTime(DateTime dateTime) {
-    return '${dateTime.day}/${dateTime.month}/${dateTime.year} at ${dateTime.hour}:${dateTime.minute.toString().padLeft(2, '0')}';
-  }
+  final String error;
+  final VoidCallback onRetry;
 
-  Future<void> _selectScheduledTime() async {
-    final now = DateTime.now();
-    final date = await showDatePicker(
-      context: context,
-      initialDate: _scheduledTime ?? now,
-      firstDate: now,
-      lastDate: now.add(const Duration(days: 30)),
-    );
-
-    if (date != null && mounted) {
-      final time = await showTimePicker(
-        context: context,
-        initialTime: _scheduledTime != null
-            ? TimeOfDay.fromDateTime(_scheduledTime!)
-            : TimeOfDay.now(),
-      );
-
-      if (time != null) {
-        setState(() {
-          _scheduledTime = DateTime(
-            date.year,
-            date.month,
-            date.day,
-            time.hour,
-            time.minute,
-          );
-        });
-      }
-    }
-  }
-
-  Future<void> _sendNotification() async {
-    if (_titleController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a title')),
-      );
-      return;
-    }
-
-    if (_messageController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a message')),
-      );
-      return;
-    }
-
-    if (_isScheduled && _scheduledTime == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select a scheduled time')),
-      );
-      return;
-    }
-
-    setState(() => _sending = true);
-
-    try {
-      final notificationService = NotificationService.instance;
-
-      if (_isScheduled && _scheduledTime != null) {
-        // Schedule notification for later
-        await _scheduleNotification(notificationService);
-      } else {
-        // Send immediately
-        await _sendImmediateNotification(notificationService);
-      }
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              _isScheduled
-                  ? 'Notification scheduled successfully'
-                  : 'Notification sent successfully',
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.error_outline, size: 64, color: Colors.redAccent),
+            const SizedBox(height: 16),
+            Text(
+              'Unable to load recipients',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(fontWeight: FontWeight.bold),
             ),
-          ),
-        );
-
-        // Clear form
-        _titleController.clear();
-        _messageController.clear();
-        setState(() {
-          _isScheduled = false;
-          _scheduledTime = null;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error sending notification: $e')),
-        );
-      }
-    } finally {
-      setState(() => _sending = false);
-    }
-  }
-
-  Future<void> _sendImmediateNotification(
-      NotificationService notificationService) async {
-    // In a real implementation, you would:
-    // 1. Get FCM tokens for target users
-    // 2. Send push notifications via FCM
-    // 3. Store notification in database for history
-
-    // For now, we'll simulate the notification
-    await Future.delayed(const Duration(seconds: 1));
-
-    // Simulate sending to each target user
-    for (final user in _targetUsers) {
-      // In real implementation: await notificationService.sendToUser(user.id, ...)
-      debugPrint('Sending notification to ${user.email}');
-    }
-  }
-
-  Future<void> _scheduleNotification(
-      NotificationService notificationService) async {
-    // In a real implementation, you would:
-    // 1. Store scheduled notification in database
-    // 2. Use Cloud Functions or local scheduling to send at the specified time
-
-    // For now, we'll just simulate scheduling
-    await Future.delayed(const Duration(seconds: 1));
-    debugPrint(
-        'Scheduled notification for ${_formatDateTime(_scheduledTime!)}');
+            const SizedBox(height: 8),
+            Text(
+              error,
+              textAlign: TextAlign.center,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

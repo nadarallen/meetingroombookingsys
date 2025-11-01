@@ -13,6 +13,9 @@ import 'core/theme/theme_notifier.dart';
 import 'features/auth/data/datasources/auth_remote_datasource.dart';
 import 'features/auth/data/repositories/auth_repository_impl.dart';
 import 'features/auth/presentation/viewmodels/auth_view_model.dart';
+import 'features/admin/data/datasources/admin_local_datasource.dart';
+import 'features/admin/data/repositories/admin_repository_impl.dart';
+import 'features/admin/domain/repositories/admin_repository.dart';
 import 'shared/services/notification_service.dart';
 import 'shared/services/ai/ai_chat_service.dart';
 import 'shared/services/storage_service.dart';
@@ -28,6 +31,9 @@ Future<void> main() async {
   final firestoreService = FirestoreService();
   final storageService = StorageService();
   final aiChatService = AiChatService();
+  final adminRepository = AdminRepositoryImpl(
+    localDataSource: AdminLocalDataSource(localDatabase: localDatabase),
+  );
   final syncManager = DatabaseSyncManager(
     localDatabase: localDatabase,
     remoteService: firestoreService,
@@ -51,6 +57,7 @@ Future<void> main() async {
         Provider<FirestoreService>.value(value: firestoreService),
         Provider<StorageService>.value(value: storageService),
         Provider<AiChatService>.value(value: aiChatService),
+        Provider<AdminRepository>.value(value: adminRepository),
       ],
       child: const MeetingRoomApp(),
     ),

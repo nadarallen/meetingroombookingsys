@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -5,6 +7,10 @@ import '../../../../core/database/database_sync_manager.dart';
 import '../../../../core/database/local_database.dart';
 import '../../../../core/database/models/room.dart';
 import '../../../../features/auth/presentation/viewmodels/auth_view_model.dart';
+import '../../domain/entities/admin_dashboard_metrics.dart';
+import '../../domain/repositories/admin_repository.dart';
+import '../../domain/usecases/get_admin_dashboard_metrics.dart';
+import '../viewmodels/admin_dashboard_view_model.dart';
 import 'admin_analytics_page.dart';
 import 'user_management_page.dart';
 
@@ -61,217 +67,331 @@ class _AdminDashboardPageState extends State<AdminDashboardPage>
       );
     }
 
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Admin Dashboard'),
-        bottom: TabBar(
+    final adminRepository = context.read<AdminRepository>();
+
+    return ChangeNotifierProvider(
+      create: (_) => AdminDashboardViewModel(
+        getAdminDashboardMetrics:
+            GetAdminDashboardMetrics(adminRepository),
+      )..load(),
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('Admin Dashboard'),
+          bottom: TabBar(
+            controller: _tabController,
+            isScrollable: true,
+            tabs: const [
+              Tab(icon: Icon(Icons.dashboard), text: 'Overview'),
+              Tab(icon: Icon(Icons.meeting_room), text: 'Rooms'),
+              Tab(icon: Icon(Icons.event_note), text: 'Bookings'),
+              Tab(icon: Icon(Icons.people), text: 'Users'),
+              Tab(icon: Icon(Icons.analytics), text: 'Analytics'),
+              Tab(icon: Icon(Icons.settings), text: 'Settings'),
+            ],
+          ),
+        ),
+        body: TabBarView(
           controller: _tabController,
-          isScrollable: true,
-          tabs: const [
-            Tab(icon: Icon(Icons.dashboard), text: 'Overview'),
-            Tab(icon: Icon(Icons.meeting_room), text: 'Rooms'),
-            Tab(icon: Icon(Icons.event_note), text: 'Bookings'),
-            Tab(icon: Icon(Icons.people), text: 'Users'),
-            Tab(icon: Icon(Icons.analytics), text: 'Analytics'),
-            Tab(icon: Icon(Icons.settings), text: 'Settings'),
+          children: [
+            _OverviewTab(onNavigateToTab: _tabController.animateTo),
+            _RoomsTab(),
+            _BookingsTab(),
+            const UserManagementPage(),
+            const AdminAnalyticsPage(),
+            _SettingsTab(),
           ],
         ),
-      ),
-      body: TabBarView(
-        controller: _tabController,
-        children: [
-          _OverviewTab(),
-          _RoomsTab(),
-          _BookingsTab(),
-          const UserManagementPage(),
-          const AdminAnalyticsPage(),
-          _SettingsTab(),
-        ],
       ),
     );
   }
 }
 
 class _OverviewTab extends StatelessWidget {
+  const _OverviewTab({required this.onNavigateToTab});
+
+  final ValueChanged<int> onNavigateToTab;
+
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Map<String, dynamic>>(
-      future: _getOverviewMetrics(context),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+    return Consumer<AdminDashboardViewModel>(
+      builder: (context, viewModel, child) {
+        if (viewModel.isLoading && viewModel.metrics == null) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        if (snapshot.hasError) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.error, size: 64, color: Colors.red),
-                const SizedBox(height: 16),
-                Text('Error: ${snapshot.error}'),
-                const SizedBox(height: 16),
-                ElevatedButton(
-                  onPressed: () {
-                    // This would need to be implemented with a callback to reload
-                    Navigator.of(context).pop();
-                    Navigator.of(context).pushReplacement(
-                      MaterialPageRoute(
-                          builder: (context) => const AdminDashboardPage()),
-                    );
-                  },
-                  child: const Text('Retry'),
-                ),
-              ],
-            ),
+        if (viewModel.error != null && viewModel.metrics == null) {
+          return _DashboardErrorState(
+            error: viewModel.error!,
+            onRetry: () => viewModel.load(forceRefresh: true),
           );
         }
 
-        final metrics = snapshot.data!;
-        return SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'System Overview',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 24),
-              GridView.count(
-                crossAxisCount: 2,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                childAspectRatio: 1.5,
-                crossAxisSpacing: 16,
-                mainAxisSpacing: 16,
-                children: [
-                  _MetricCard(
-                    title: 'Today\'s Bookings',
-                    value: '${metrics['todayBookings']}',
-                    icon: Icons.event,
-                    color: Colors.blue,
-                  ),
-                  _MetricCard(
-                    title: 'This Week',
-                    value: '${metrics['weekBookings']}',
-                    icon: Icons.calendar_view_week,
-                    color: Colors.green,
-                  ),
-                  _MetricCard(
-                    title: 'This Month',
-                    value: '${metrics['monthBookings']}',
-                    icon: Icons.calendar_month,
-                    color: Colors.orange,
-                  ),
-                  _MetricCard(
-                    title: 'Active Users',
-                    value: '${metrics['activeUsers']}',
-                    icon: Icons.people,
-                    color: Colors.purple,
-                  ),
-                  _MetricCard(
-                    title: 'Room Utilization',
-                    value: '${metrics['roomUtilization']}%',
-                    icon: Icons.meeting_room,
-                    color: Colors.teal,
-                  ),
-                  _MetricCard(
-                    title: 'Pending Approvals',
-                    value: '${metrics['pendingApprovals']}',
-                    icon: Icons.pending_actions,
-                    color: Colors.red,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 32),
-              const Text(
-                'Quick Actions',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () =>
-                          _navigateToTab(context, 4), // Analytics tab
-                      icon: const Icon(Icons.analytics),
-                      label: const Text('View Analytics'),
+        final metrics = viewModel.metrics;
+        if (metrics == null) {
+          return const SizedBox.shrink();
+        }
+
+        return RefreshIndicator(
+          onRefresh: () => viewModel.load(forceRefresh: true),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'System Overview',
+                            style: TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        if (viewModel.lastUpdated != null)
+                          Text(
+                            'Updated ${_formatTimestamp(context, viewModel.lastUpdated!)}',
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(color: Colors.grey[600]),
+                          ),
+                      ],
                     ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: ElevatedButton.icon(
-                      onPressed: () =>
-                          _navigateToTab(context, 5), // Settings tab
-                      icon: const Icon(Icons.notifications),
-                      label: const Text('Send Broadcast'),
+                    const SizedBox(height: 24),
+                    _MetricsWrap(
+                      metrics: metrics,
+                      maxWidth: constraints.maxWidth,
                     ),
-                  ),
-                ],
-              ),
-            ],
+                    const SizedBox(height: 32),
+                    const Text(
+                      'Quick Actions',
+                      style:
+                          TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 16),
+                    _QuickActions(onNavigateToTab: onNavigateToTab),
+                  ],
+                ),
+              );
+            },
           ),
         );
       },
     );
   }
 
-  Future<Map<String, dynamic>> _getOverviewMetrics(BuildContext context) async {
-    final localDatabase = context.read<LocalDatabase>();
+  static String _formatTimestamp(BuildContext context, DateTime dateTime) {
     final now = DateTime.now();
-    final todayStart = DateTime(now.year, now.month, now.day);
-    final weekStart = todayStart.subtract(Duration(days: now.weekday - 1));
-    final monthStart = DateTime(now.year, now.month, 1);
+    if (now.difference(dateTime).inMinutes < 1) {
+      return 'just now';
+    }
+    final localizations = MaterialLocalizations.of(context);
+    final timeString =
+        localizations.formatTimeOfDay(TimeOfDay.fromDateTime(dateTime));
+    if (now.year == dateTime.year &&
+        now.month == dateTime.month &&
+        now.day == dateTime.day) {
+      return 'at $timeString';
+    }
+    return '${dateTime.month}/${dateTime.day} $timeString';
+  }
+}
 
-    // Get bookings for different time periods
-    final allBookings = await localDatabase.getBookings();
-    final todayBookings = allBookings
-        .where((b) =>
-            b.startTime.isAfter(todayStart) &&
-            b.startTime.isBefore(todayStart.add(const Duration(days: 1))))
-        .length;
-    final weekBookings = allBookings
-        .where((b) =>
-            b.startTime.isAfter(weekStart) &&
-            b.startTime.isBefore(weekStart.add(const Duration(days: 7))))
-        .length;
-    final monthBookings = allBookings
-        .where((b) =>
-            b.startTime.isAfter(monthStart) &&
-            b.startTime.isBefore(monthStart.add(const Duration(days: 31))))
-        .length;
+class _DashboardErrorState extends StatelessWidget {
+  const _DashboardErrorState({required this.error, required this.onRetry});
 
-    // Get active users
-    final users = await localDatabase.getUsers();
-    final activeUsers = users.where((u) => u.isActive).length;
+  final String error;
+  final VoidCallback onRetry;
 
-    // Calculate room utilization (simplified)
-    final rooms = await localDatabase.getRooms();
-    final totalRooms = rooms.length;
-    final utilizedRooms = rooms
-        .where((r) => allBookings
-            .any((b) => b.roomId == r.id && b.startTime.isAfter(todayStart)))
-        .length;
-    final roomUtilization =
-        totalRooms > 0 ? (utilizedRooms / totalRooms * 100).round() : 0;
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.error_outline, size: 64, color: Colors.redAccent),
+            const SizedBox(height: 16),
+            Text(
+              'Something went wrong',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              error,
+              textAlign: TextAlign.center,
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: Colors.grey[600]),
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Retry'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
-    return {
-      'todayBookings': todayBookings,
-      'weekBookings': weekBookings,
-      'monthBookings': monthBookings,
-      'activeUsers': activeUsers,
-      'roomUtilization': roomUtilization,
-      'pendingApprovals': 0, // Placeholder - would need approval system
-    };
+class _MetricsWrap extends StatelessWidget {
+  const _MetricsWrap({
+    required this.metrics,
+    required this.maxWidth,
+  });
+
+  final AdminDashboardMetrics metrics;
+  final double maxWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    final tiles = [
+      _MetricCard(
+        title: "Today's Bookings",
+        value: metrics.todaysBookings.toString(),
+        icon: Icons.event,
+        color: Colors.blue,
+      ),
+      _MetricCard(
+        title: 'This Week',
+        value: metrics.weekBookings.toString(),
+        icon: Icons.calendar_view_week,
+        color: Colors.green,
+      ),
+      _MetricCard(
+        title: 'This Month',
+        value: metrics.monthBookings.toString(),
+        icon: Icons.calendar_month,
+        color: Colors.orange,
+      ),
+      _MetricCard(
+        title: 'Active Users',
+        value: metrics.activeUsers.toString(),
+        icon: Icons.people_alt,
+        color: Colors.purple,
+      ),
+      _MetricCard(
+        title: 'Room Utilization',
+        value: '${metrics.roomUtilization.toStringAsFixed(1)}%',
+        icon: Icons.meeting_room,
+        color: Colors.teal,
+      ),
+      _MetricCard(
+        title: 'Pending Approvals',
+        value: metrics.pendingApprovals.toString(),
+        icon: Icons.pending_actions,
+        color: Colors.redAccent,
+      ),
+      _MetricCard(
+        title: 'Check-ins Today',
+        value: metrics.checkInsToday.toString(),
+        icon: Icons.verified_user,
+        color: Colors.indigo,
+      ),
+      _MetricCard(
+        title: 'Weekly Cancellations',
+        value: metrics.cancellationsThisWeek.toString(),
+        icon: Icons.cancel_schedule_send,
+        color: Colors.brown,
+      ),
+      _MetricCard(
+        title: 'Queued Broadcasts',
+        value: metrics.queuedBroadcasts.toString(),
+        icon: Icons.notifications_active,
+        color: Colors.deepOrange,
+      ),
+    ];
+
+    final cardWidth = _resolveCardWidth(maxWidth);
+
+    return Wrap(
+      spacing: 16,
+      runSpacing: 16,
+      children: tiles
+          .map(
+            (tile) => SizedBox(
+              width: cardWidth,
+              child: tile,
+            ),
+          )
+          .toList(),
+    );
   }
 
-  void _navigateToTab(BuildContext context, int tabIndex) {
-    // This would need to be implemented with a callback to the parent widget
-    // For now, we'll just show a snackbar
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Navigate to tab $tabIndex')),
+  double _resolveCardWidth(double maxWidth) {
+    if (maxWidth <= 360) {
+      return maxWidth;
+    }
+    final columns = math.max(1, math.min(3, (maxWidth / 260).floor()));
+    final totalSpacing = 16.0 * (columns - 1);
+    return (maxWidth - totalSpacing) / columns;
+  }
+}
+
+class _QuickActions extends StatelessWidget {
+  const _QuickActions({required this.onNavigateToTab});
+
+  final ValueChanged<int> onNavigateToTab;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isSmall = constraints.maxWidth < 640;
+        if (isSmall) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ElevatedButton.icon(
+                onPressed: () => onNavigateToTab(4),
+                icon: const Icon(Icons.analytics),
+                label: const Text('View Analytics'),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: () => onNavigateToTab(5),
+                icon: const Icon(Icons.notifications_active),
+                label: const Text('Broadcast'),
+              ),
+            ],
+          );
+        }
+
+        return Row(
+          children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: () => onNavigateToTab(4),
+                icon: const Icon(Icons.analytics),
+                label: const Text('View Analytics'),
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: () => onNavigateToTab(5),
+                icon: const Icon(Icons.notifications_active),
+                label: const Text('Broadcast'),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
