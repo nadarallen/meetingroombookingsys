@@ -43,6 +43,22 @@ Getting Started
    flutter run
    ```
 
+Updating to Latest Changes
+1. Pull the latest code from the repository:
+   ```bash
+   git pull origin main
+   ```
+2. Refresh dependencies to pick up any new packages or version bumps:
+   ```bash
+   flutter pub get
+   ```
+3. (Optional) If you run into stale build artefacts, clean the project before rebuilding:
+   ```bash
+   flutter clean
+   flutter pub get
+   ```
+4. Launch the app again with `flutter run`. The bundled Sqflite migrations automatically upgrade the local database (current schema version: 6). If you prefer to start fresh, clear the app data on your simulator/emulator or delete the `meeting_room_booking.db` file before relaunching.
+
 Maps & Navigation
 - Rooms accept latitude/longitude alongside textual locations.
 - A dedicated map view (`/rooms/map`) renders markers for geo-tagged rooms.

@@ -5,6 +5,8 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
+import 'models/admin_audit_log_record.dart';
+import 'models/admin_broadcast_record.dart';
 import 'models/amenity.dart';
 import 'models/app_user.dart';
 import 'models/booking.dart';
@@ -16,12 +18,14 @@ class LocalDatabase {
   static final LocalDatabase instance = LocalDatabase._();
 
   static const _databaseName = 'meeting_room_booking.db';
-  static const _schemaVersion = 5;
+  static const _schemaVersion = 6;
 
   static const _roomsTable = 'rooms';
   static const _bookingsTable = 'bookings';
   static const _usersTable = 'users';
   static const _amenitiesTable = 'amenities';
+  static const _adminBroadcastsTable = 'admin_broadcasts';
+  static const _adminAuditLogsTable = 'admin_audit_logs';
 
   Database? _database;
   Completer<Database>? _opening;
@@ -176,6 +180,40 @@ class LocalDatabase {
     await db.execute(
       'CREATE INDEX idx_rooms_location ON $_roomsTable(latitude, longitude)',
     );
+    await db.execute('''
+      CREATE TABLE $_adminBroadcastsTable (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        message TEXT NOT NULL,
+        target_type TEXT NOT NULL,
+        target_value TEXT,
+        status TEXT NOT NULL,
+        scheduled_at INTEGER,
+        sent_at INTEGER,
+        created_at INTEGER NOT NULL,
+        created_by TEXT NOT NULL
+      )
+    ''');
+    await db.execute('''
+      CREATE TABLE $_adminAuditLogsTable (
+        id TEXT PRIMARY KEY,
+        actor_id TEXT NOT NULL,
+        action_type TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT,
+        payload TEXT,
+        created_at INTEGER NOT NULL
+      )
+    ''');
+    await db.execute(
+      'CREATE INDEX idx_admin_broadcasts_status ON $_adminBroadcastsTable(status)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_admin_broadcasts_schedule ON $_adminBroadcastsTable(scheduled_at)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_admin_audit_created_at ON $_adminAuditLogsTable(created_at)',
+    );
   }
 
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -228,6 +266,45 @@ class LocalDatabase {
           );
           await database.execute(
             'CREATE INDEX IF NOT EXISTS idx_rooms_location ON $_roomsTable(latitude, longitude)',
+          );
+        },
+      ),
+      _Migration(
+        targetVersion: 6,
+        run: (database) async {
+          await database.execute('''
+            CREATE TABLE IF NOT EXISTS $_adminBroadcastsTable (
+              id TEXT PRIMARY KEY,
+              title TEXT NOT NULL,
+              message TEXT NOT NULL,
+              target_type TEXT NOT NULL,
+              target_value TEXT,
+              status TEXT NOT NULL,
+              scheduled_at INTEGER,
+              sent_at INTEGER,
+              created_at INTEGER NOT NULL,
+              created_by TEXT NOT NULL
+            )
+          ''');
+          await database.execute('''
+            CREATE TABLE IF NOT EXISTS $_adminAuditLogsTable (
+              id TEXT PRIMARY KEY,
+              actor_id TEXT NOT NULL,
+              action_type TEXT NOT NULL,
+              entity_type TEXT NOT NULL,
+              entity_id TEXT,
+              payload TEXT,
+              created_at INTEGER NOT NULL
+            )
+          ''');
+          await database.execute(
+            'CREATE INDEX IF NOT EXISTS idx_admin_broadcasts_status ON $_adminBroadcastsTable(status)',
+          );
+          await database.execute(
+            'CREATE INDEX IF NOT EXISTS idx_admin_broadcasts_schedule ON $_adminBroadcastsTable(scheduled_at)',
+          );
+          await database.execute(
+            'CREATE INDEX IF NOT EXISTS idx_admin_audit_created_at ON $_adminAuditLogsTable(created_at)',
           );
         },
       ),
@@ -513,6 +590,17 @@ class LocalDatabase {
     return result.map(Booking.fromLocalMap).toList();
   }
 
+  Future<int> getPendingBookingsCount() async {
+    final db = await database;
+    final result = Sqflite.firstIntValue(
+      await db.rawQuery(
+        'SELECT COUNT(*) FROM $_bookingsTable WHERE status = ?',
+        ['pending'],
+      ),
+    );
+    return result ?? 0;
+  }
+
   Future<void> markBookingSynced(String id) async {
     final db = await database;
     await db.update(
@@ -521,6 +609,45 @@ class LocalDatabase {
       where: 'id = ?',
       whereArgs: [id],
     );
+  }
+
+  Future<void> upsertAdminBroadcast(AdminBroadcastRecord record) async {
+    final db = await database;
+    await db.insert(
+      _adminBroadcastsTable,
+      record.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<AdminBroadcastRecord>> getAdminBroadcasts({int limit = 50}) async {
+    final db = await database;
+    final result = await db.query(
+      _adminBroadcastsTable,
+      orderBy:
+          'COALESCE(scheduled_at, created_at) DESC, created_at DESC',
+      limit: limit,
+    );
+    return result.map(AdminBroadcastRecord.fromMap).toList();
+  }
+
+  Future<void> insertAdminAuditLog(AdminAuditLogRecord record) async {
+    final db = await database;
+    await db.insert(
+      _adminAuditLogsTable,
+      record.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<List<AdminAuditLogRecord>> getAdminAuditLogs({int limit = 100}) async {
+    final db = await database;
+    final result = await db.query(
+      _adminAuditLogsTable,
+      orderBy: 'created_at DESC',
+      limit: limit,
+    );
+    return result.map(AdminAuditLogRecord.fromMap).toList();
   }
 
   Future<void> clear() async {
